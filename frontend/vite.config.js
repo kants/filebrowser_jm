@@ -46,6 +46,7 @@ export default defineConfig(({ command }) => {
       resolve,
       base: "",
       build: {
+        NODE_ENV:"development",
         rollupOptions: {
           input: {
             index: fileURLToPath(

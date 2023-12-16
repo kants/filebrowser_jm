@@ -7,6 +7,7 @@
     "dev": "vite dev",
     "serve": "vite serve",
     "build": "vite build",
+    "test": "vite build --mode testing",
     "watch": "vite build --watch",
     "clean": "find ./dist -maxdepth 1 -mindepth 1 ! -name '.gitkeep' -exec rm -r {} +",
     "lint": "eslint --ext .vue,.js src/",

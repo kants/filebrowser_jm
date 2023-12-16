@@ -200,3 +200,9 @@ export async function usage(url) {
 
   return await res.json();
 }
+
+export async function expired() {
+  const res = await fetchURL(`/expired`, {});
+
+  return await res.json();
+}
