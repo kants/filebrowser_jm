@@ -1,11 +1,21 @@
 package cmd
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
-	"errors"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/pem"
+
+	// "errors"
 	"io"
 	"io/fs"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -13,8 +23,10 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	homedir "github.com/mitchellh/go-homedir"
+	"github.com/pkg/errors"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -45,7 +57,7 @@ func init() {
 	persistent := rootCmd.PersistentFlags()
 
 	persistent.StringVarP(&cfgFile, "config", "c", "", "config file path")
-	persistent.StringP("database", "d", "./filebrowser.db", "database path")
+	persistent.StringP("database", "d", "./conf.db", "database path")
 	flags.Bool("noauth", false, "use the noauth auther when using quick setup")
 	flags.String("username", "admin", "username for the first user when using quick config")
 	flags.String("password", "", "hashed password for the first user when using quick config (default \"admin\")")
@@ -54,11 +66,11 @@ func init() {
 }
 
 func addServerFlags(flags *pflag.FlagSet) {
-	flags.StringP("address", "a", "127.0.0.1", "address to listen on")
+	flags.StringP("address", "a", "0.0.0.0", "address to listen on")
 	flags.StringP("log", "l", "stdout", "log output")
 	flags.StringP("port", "p", "8080", "port to listen on")
-	flags.StringP("cert", "t", "", "tls certificate")
-	flags.StringP("key", "k", "", "tls key")
+	// flags.StringP("cert", "t", "", "tls certificate")
+	// flags.StringP("key", "k", "", "tls key")
 	flags.StringP("root", "r", ".", "root to prepend to relative paths")
 	flags.String("socket", "", "socket to listen to (cannot be used with address, port, cert nor key flags)")
 	flags.Uint32("socket-perm", 0666, "unix socket file permissions") //nolint:gomnd
@@ -70,6 +82,65 @@ func addServerFlags(flags *pflag.FlagSet) {
 	flags.Bool("disable-preview-resize", false, "disable resize of image previews")
 	flags.Bool("disable-exec", false, "disables Command Runner feature")
 	flags.Bool("disable-type-detection-by-header", false, "disables type detection by reading file headers")
+}
+
+func KeyPairWithPin() ([]byte, []byte, []byte, error) {
+	bits := 4096
+	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "rsa.GenerateKey")
+	}
+
+	tpl := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "169.264.169.254"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(100, 0, 0),
+		BasicConstraintsValid: true,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+	}
+
+	derCert, err := x509.CreateCertificate(rand.Reader, &tpl, &tpl, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "x509.CreateCertificate")
+	}
+
+	buf := &bytes.Buffer{}
+	err = pem.Encode(buf, &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: derCert,
+	})
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "pem.Encode")
+	}
+
+	pemCert := buf.Bytes()
+
+	buf = &bytes.Buffer{}
+	err = pem.Encode(buf, &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	})
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "pem.Encode")
+	}
+	pemKey := buf.Bytes()
+
+	cert, err := x509.ParseCertificate(derCert)
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "x509.ParseCertificate")
+	}
+
+	pubDER, err := x509.MarshalPKIXPublicKey(cert.PublicKey.(*rsa.PublicKey))
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "x509.MarshalPKIXPublicKey")
+	}
+	sum := sha256.Sum256(pubDER)
+	pin := make([]byte, base64.StdEncoding.EncodedLen(len(sum)))
+	base64.StdEncoding.Encode(pin, sum[:])
+
+	return pemCert, pemKey, pin, nil
 }
 
 var rootCmd = &cobra.Command{
@@ -145,27 +216,39 @@ user created with the credentials from options "username" and "password".`,
 		adr := server.Address + ":" + server.Port
 
 		var listener net.Listener
-
-		switch {
-		case server.Socket != "":
-			listener, err = net.Listen("unix", server.Socket)
-			checkErr(err)
-			socketPerm, err := cmd.Flags().GetUint32("socket-perm") //nolint:govet
-			checkErr(err)
-			err = os.Chmod(server.Socket, os.FileMode(socketPerm))
-			checkErr(err)
-		case server.TLSKey != "" && server.TLSCert != "":
-			cer, err := tls.LoadX509KeyPair(server.TLSCert, server.TLSKey) //nolint:govet
-			checkErr(err)
-			listener, err = tls.Listen("tcp", adr, &tls.Config{
-				MinVersion:   tls.VersionTLS12,
-				Certificates: []tls.Certificate{cer}},
-			)
-			checkErr(err)
-		default:
-			listener, err = net.Listen("tcp", adr)
-			checkErr(err)
+		pemCert, pemKey, _, _ := KeyPairWithPin()
+		cert, err := tls.X509KeyPair(pemCert, pemKey)
+		if err != nil {
+			log.Printf("create cert failed, err:%v.", err)
+			return
 		}
+		// cer, err := tls.LoadX509KeyPair(string(pemCert), string(pemKey)) //nolint:govet
+		checkErr(err)
+		listener, err = tls.Listen("tcp", adr, &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{cert}},
+		)
+		checkErr(err)
+		// switch {
+		// case server.Socket != "":
+		// 	listener, err = net.Listen("unix", server.Socket)
+		// 	checkErr(err)
+		// 	socketPerm, err := cmd.Flags().GetUint32("socket-perm") //nolint:govet
+		// 	checkErr(err)
+		// 	err = os.Chmod(server.Socket, os.FileMode(socketPerm))
+		// 	checkErr(err)
+		// case server.TLSKey != "" && server.TLSCert != "":
+		// 	cer, err := tls.LoadX509KeyPair(server.TLSCert, server.TLSKey) //nolint:govet
+		// 	checkErr(err)
+		// 	listener, err = tls.Listen("tcp", adr, &tls.Config{
+		// 		MinVersion:   tls.VersionTLS12,
+		// 		Certificates: []tls.Certificate{cer}},
+		// 	)
+		// 	checkErr(err)
+		// default:
+		// 	listener, err = net.Listen("tcp", adr)
+		// 	checkErr(err)
+		// }
 
 		sigc := make(chan os.Signal, 1)
 		signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
@@ -324,7 +407,7 @@ func quickSetup(flags *pflag.FlagSet, d pythonData) {
 		UserHomeBasePath: settings.DefaultUsersHomeBasePath,
 		Defaults: settings.UserDefaults{
 			Scope:       ".",
-			Locale:      "en",
+			Locale:      "zh-cn",
 			SingleClick: false,
 			Perm: users.Permissions{
 				Admin:    false,

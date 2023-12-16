@@ -43,6 +43,8 @@ func NewHandler(
 	}
 
 	r.HandleFunc("/health", healthHandler)
+	r.HandleFunc("/expired", expiredHandler)
+
 	r.PathPrefix("/static").Handler(static)
 	r.NotFoundHandler = index
 

@@ -1,7 +1,9 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
+	"filebrowser/makelicense"
 	"net/http"
 	"net/url"
 	"path"
@@ -145,4 +147,12 @@ func authenticateShareRequest(r *http.Request, l *share.Link) (int, error) {
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"OK"}`))
+}
+
+func expiredHandler(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	expiredMap := make(map[string]string)
+	expiredMap["date"] = makelicense.ExpiredDate
+	res, _ := json.Marshal(expiredMap)
+	_, _ = w.Write(res)
 }

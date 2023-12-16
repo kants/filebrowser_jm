@@ -93,20 +93,20 @@
     </div>
 
     <p class="credits">
-      <span>
-        <span v-if="disableExternal">File Browser</span>
-        <a
+      <!-- <span> -->
+        <span>有效期至: 2023-12-14</span>
+        <!-- <a
           v-else
           rel="noopener noreferrer"
           target="_blank"
           href="https://github.com/filebrowser/filebrowser"
           >File Browser</a
-        >
-        <span> {{ version }}</span>
-      </span>
-      <span>
+        > -->
+        <!-- <span> </span>
+      </span> -->
+      <!-- <span>
         <a @click="help">{{ $t("sidebar.help") }}</a>
-      </span>
+      </span> -->
     </p>
   </nav>
 </template>
