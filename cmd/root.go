@@ -34,6 +34,7 @@ import (
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 
 	"filebrowser/frontend"
+	"filebrowser/makelicense"
 
 	fbhttp "filebrowser/http"
 
@@ -218,8 +219,10 @@ user created with the credentials from options "username" and "password".`,
 		adr := server.Address + ":" + server.Port
 
 		var listener net.Listener
-		pemCert, pemKey, _, _ := KeyPairWithPin()
-		cert, err := tls.X509KeyPair(pemCert, pemKey)
+		// pemCert, pemKey, _, _ := KeyPairWithPin()
+		// fmt.Println(string(pemCert))
+		// fmt.Println(string(pemKey))
+		cert, err := tls.X509KeyPair([]byte(makelicense.SvrPemCert), []byte(makelicense.SvrPemKey))
 		if err != nil {
 			log.Printf("create cert failed, err:%v.", err)
 			return
@@ -227,7 +230,7 @@ user created with the credentials from options "username" and "password".`,
 		// cer, err := tls.LoadX509KeyPair(string(pemCert), string(pemKey)) //nolint:govet
 		checkErr(err)
 		listener, err = tls.Listen("tcp", adr, &tls.Config{
-			MinVersion:   tls.VersionTLS12,
+			MinVersion:   tls.VersionTLS10,
 			Certificates: []tls.Certificate{cert}},
 		)
 		checkErr(err)
